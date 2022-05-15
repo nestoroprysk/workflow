@@ -2,10 +2,6 @@ package workflow
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -18,13 +14,11 @@ type Person struct {
 }
 
 type NameReader struct {
-	resp http.ResponseWriter
-	req  *http.Request
+	Name string
 }
 
 type SurnameReader struct {
-	resp http.ResponseWriter
-	req  *http.Request
+	Surname string
 }
 
 type StateLS struct {
@@ -40,60 +34,26 @@ func (sls *StateLS) Save(s State) error {
 	return nil
 }
 
-func NewNameReader(resp http.ResponseWriter, req *http.Request) *NameReader {
-	return &NameReader{
-		resp: resp,
-		req:  req,
-	}
-}
-
 func (nr *NameReader) Run(ctx context.Context, csd *StateDecoder) (any, error) {
-	var result Person
-	err := json.NewDecoder(nr.req.Body).Decode(&result)
-	if err != nil {
-		return nil, err
-	}
-
-	return result, nil
+	return Person{Name: nr.Name}, nil
 }
 
-func NewSurnameReader(resp http.ResponseWriter, req *http.Request) *SurnameReader {
-	return &SurnameReader{
-		resp: resp,
-		req:  req,
-	}
-}
-
-func (nr *SurnameReader) Run(ctx context.Context, csd *StateDecoder) (any, error) {
-	var p Person
-	err := json.NewDecoder(nr.req.Body).Decode(&p)
-	if err != nil {
-		return nil, err
-	}
-
+func (sr *SurnameReader) Run(ctx context.Context, csd *StateDecoder) (any, error) {
 	var result Person
-	err = csd.Decode(&result)
+	err := csd.Decode(&result)
 	if err != nil {
 		return nil, err
 	}
 
-	result.Surname = p.Surname
+	result.Surname = sr.Surname
 
 	return result, nil
 }
 
 func TestWorkflow(t *testing.T) {
-	w := NewWorkflow(
-		&StateLS{},
-		NewNameReader(
-			httptest.NewRecorder(),
-			httptest.NewRequest(http.MethodPost, "/name", strings.NewReader(`{"name": "Peter"}`)),
-		),
-		NewSurnameReader(
-			httptest.NewRecorder(),
-			httptest.NewRequest(http.MethodPost, "/surname", strings.NewReader(`{"surname": "Parker"}`)),
-		),
-	)
+	nr := &NameReader{Name: "Peter"}
+	sr := &SurnameReader{Surname: "Parker"}
+	w := NewWorkflow(&StateLS{}, nr, sr)
 
 	result, err := w.Continue(context.TODO())
 	require.NoError(t, err)
@@ -107,4 +67,19 @@ func TestWorkflow(t *testing.T) {
 	require.NoError(t, result.Decode(&p))
 	assert.Equal(t, "Peter", p.Name)
 	assert.Equal(t, "Parker", p.Surname)
+
+	nr.Name = "Harry"
+	sr.Surname = "Potter"
+
+	result, err = w.Continue(context.TODO())
+	require.NoError(t, err)
+	require.Nil(t, result, "should return nil because the new workflow is pending")
+
+	result, err = w.Continue(context.TODO())
+	require.NoError(t, err)
+	require.NotNil(t, result, "should return result because the new workflow is ower")
+
+	require.NoError(t, result.Decode(&p))
+	assert.Equal(t, "Harry", p.Name)
+	assert.Equal(t, "Potter", p.Surname)
 }
